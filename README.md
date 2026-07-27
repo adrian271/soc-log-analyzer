@@ -86,8 +86,14 @@ npx vercel deploy --prod
 
 **Notes**
 
-- **TLS is automatic.** `src/lib/db.ts` enables verified TLS for any non-local
-  host. If a provider serves a chain Node can't verify, set `PGSSL_NO_VERIFY=true`.
+- **End the connection string with `?sslmode=verify-full`,** not `?sslmode=require`.
+  The two behave identically today, but `pg` v9 redefines `require` as
+  encrypt-without-verifying — so `require` silently weakens the connection on a
+  future dependency bump, and logs a deprecation warning until then.
+- **TLS is otherwise automatic.** `src/lib/db.ts` enables verified TLS for any
+  non-local host. Note that when the URL carries an `sslmode`, `pg` builds its
+  own config from it and ignores the one in code — so `PGSSL_NO_VERIFY` only
+  applies to URLs with no `sslmode`, and the app warns if you set both.
 - **`ANTHROPIC_API_KEY` is intentionally unset in production.** Every upload
   gets the deterministic brief, which costs nothing, adds no latency inside the
   request, and can't time out. The UI labels it `rule-generated`, so what you

@@ -31,7 +31,10 @@ const DEMO_PASSWORD = process.env.DEMO_USER_PASSWORD ?? "SocAnalyst!2024";
 const isLocal = /@(localhost|127\.0\.0\.1|host\.docker\.internal)[:/]/.test(
   connectionString,
 );
-const ssl = isLocal
+// When the URL carries `sslmode`, pg builds its own ssl config from it and
+// discards ours — so only supply one when the URL is silent. See src/lib/db.ts.
+const urlDeclaresSsl = /[?&]sslmode=/.test(connectionString);
+const ssl = isLocal || urlDeclaresSsl
   ? undefined
   : { rejectUnauthorized: process.env.PGSSL_NO_VERIFY !== "true" };
 
