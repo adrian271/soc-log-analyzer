@@ -119,14 +119,12 @@ function LoginForm() {
           </button>
         </form>
 
-        <p className="mt-4 text-xs text-[var(--text-muted)] leading-relaxed">
-          Demo account seeded by <code>npm run db:migrate</code>:
-          <br />
-          <code className="text-[var(--text-secondary)]">
-            analyst@tenex.local
-          </code>{" "}
-          / <code className="text-[var(--text-secondary)]">SocAnalyst!2024</code>
-        </p>
+        {/*
+          No credentials printed here. This is a publicly reachable deployment
+          and every upload costs two model calls, so the sign-in details are
+          shared directly with reviewers rather than published on the page.
+          Local setup instructions are in the README.
+        */}
       </div>
     </main>
   );
