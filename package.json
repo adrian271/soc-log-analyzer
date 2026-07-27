@@ -14,7 +14,8 @@
     "gen:logs": "node scripts/generate-sample-logs.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:migrate:remote": "node scripts/migrate.mjs"
+    "db:migrate:remote": "node scripts/migrate.mjs",
+    "eval:ai": "vitest run --config vitest.eval.config.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

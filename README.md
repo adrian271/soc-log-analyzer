@@ -462,6 +462,28 @@ npm test
   the detectors being noise.
 - Schema drift in a stored rollup is caught, not surfaced as `undefined` three
   layers later — including a malformed bucket nested inside a valid object.
+- A model finding can never outrank the weakest deterministic one, its severity
+  is derived rather than trusted, and hallucinated line numbers are dropped.
+
+### Evaluating the model layer
+
+```bash
+npm run eval:ai      # needs a valid ANTHROPIC_API_KEY; makes real API calls
+```
+
+Kept out of `npm test` deliberately: it costs money, needs network, and is
+non-deterministic, so the normal suite stays fast and runs with no credentials.
+
+It applies to the model layer the **same bar the deterministic detectors had to
+clear**: run it against `zscaler-benign.log`, where nothing is wrong, and it must
+not escalate anything. A layer that invents findings in clean traffic isn't a
+detector, it's a noise generator — and it's worse than nothing, because analysts
+learn to ignore the section it lives in. If it can't clear that bar, revert it
+rather than ship it.
+
+The eval also asserts the residue boundary holds (the model never cites a line
+the rules engine already flagged) and prints the findings for a human to judge.
+**Zero findings is an acceptable result; plausible-but-unverifiable is not.**
 
 ---
 
