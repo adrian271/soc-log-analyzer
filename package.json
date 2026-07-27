@@ -13,7 +13,8 @@
     "db:migrate": "node --env-file=.env scripts/migrate.mjs",
     "gen:logs": "node scripts/generate-sample-logs.mjs",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "db:migrate:remote": "node scripts/migrate.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
@@ -21,7 +22,8 @@
     "next": "16.2.12",
     "pg": "^8.22.0",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

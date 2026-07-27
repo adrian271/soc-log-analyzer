@@ -57,36 +57,15 @@ export interface Anomaly {
   evidence: Record<string, unknown>;
 }
 
-/** Aggregate rollups computed once at ingest and stored on the upload row. */
-export interface UploadStats {
-  totalEvents: number;
-  uniqueClientIps: number;
-  uniqueUsers: number;
-  uniqueHosts: number;
-  blockedCount: number;
-  allowedCount: number;
-  threatCount: number;
-  bytesSent: number;
-  bytesReceived: number;
-  /** Fixed-width buckets across the log's time range, for the timeline chart. */
-  timeline: TimelineBucket[];
-  topHosts: CountPair[];
-  topCategories: CountPair[];
-  topClientIps: CountPair[];
-  topThreats: CountPair[];
-  statusBreakdown: CountPair[];
-}
-
-export interface TimelineBucket {
-  /** ISO timestamp of the bucket's start. */
-  start: string;
-  total: number;
-  blocked: number;
-  threats: number;
-  anomalous: number;
-}
-
-export interface CountPair {
-  key: string;
-  count: number;
-}
+/**
+ * The three shapes below are stored as JSON and read back later, so they are
+ * defined once as runtime schemas in `./schemas` and their types inferred from
+ * there. Declaring them twice — an interface here and a schema there — is
+ * exactly how a validator drifts away from the thing it is meant to validate.
+ */
+export type {
+  UploadStats,
+  TimelineBucket,
+  CountPair,
+  Evidence,
+} from "./schemas";

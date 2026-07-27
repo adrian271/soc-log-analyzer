@@ -40,3 +40,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# personal working notes — video script, scratch docs. Not part of the deliverable.
+notes/

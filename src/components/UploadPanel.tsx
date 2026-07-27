@@ -87,7 +87,7 @@ export function UploadPanel() {
               Drop a log file here, or click to browse
             </p>
             <p className="mt-1 text-xs text-[var(--text-muted)]">
-              ZScaler web proxy format · .log .txt .tsv .csv · up to 32 MB
+              ZScaler web proxy format · .log .txt .tsv .csv · up to 4 MB
             </p>
           </>
         )}

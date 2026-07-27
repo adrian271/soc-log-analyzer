@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { currentUser } from "@/lib/auth";
 import { query } from "@/lib/db";
 import { formatBytes } from "@/lib/stats";
-import type { UploadStats } from "@/lib/types";
+import { parseEvidence, parseUploadStats } from "@/lib/schemas";
 import { AppHeader } from "@/components/AppHeader";
 import { TimelineChart } from "@/components/TimelineChart";
 import { AnomalyCard, type AnomalyView } from "@/components/AnomalyCard";
@@ -16,7 +16,8 @@ interface UploadRow extends Record<string, unknown> {
   malformed_lines: number;
   range_start: Date | null;
   range_end: Date | null;
-  stats: UploadStats | null;
+  /** Raw JSONB — validated through parseUploadStats before use, never cast. */
+  stats: unknown;
   narrative: string | null;
   narrative_model: string | null;
 }
@@ -32,7 +33,8 @@ interface AnomalyRow extends Record<string, unknown> {
   first_seen: Date | null;
   last_seen: Date | null;
   event_count: number;
-  evidence: Record<string, unknown> | null;
+  /** Raw JSONB — validated through parseEvidence before use. */
+  evidence: unknown;
 }
 
 export default async function ReportPage({
@@ -54,7 +56,10 @@ export default async function ReportPage({
   if (rows.length === 0) notFound();
 
   const upload = rows[0];
-  const stats = upload.stats;
+  // Validated, not asserted. A stats blob that no longer matches the schema
+  // parses to null, and the page renders without the aggregate sections rather
+  // than throwing on first property access.
+  const stats = parseUploadStats(upload.stats);
 
   const anomalyRows = await query<AnomalyRow>(
     `SELECT id, detector, title, severity, confidence, explanation, entity,
@@ -76,7 +81,7 @@ export default async function ReportPage({
     firstSeen: a.first_seen,
     lastSeen: a.last_seen,
     eventCount: a.event_count,
-    evidence: a.evidence,
+    evidence: parseEvidence(a.evidence),
   }));
 
   const critical = anomalies.filter((a) => a.severity === "critical").length;

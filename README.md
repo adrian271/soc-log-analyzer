@@ -54,6 +54,52 @@ npm run db:down    # stop Postgres
 
 ---
 
+## Deploying
+
+The app runs on Vercel with any managed Postgres. Nothing about it is
+Vercel-specific — it's a standard Next.js app plus a `DATABASE_URL`.
+
+**1. Create a Postgres database.** On [Neon](https://neon.tech), create a
+project and copy the **pooled** connection string — the host contains `-pooler`.
+The pooler is what keeps serverless functions from exhausting the connection
+limit; the direct endpoint will work until it suddenly doesn't.
+
+**2. Apply the schema and seed the demo user**, from your machine:
+
+```bash
+DATABASE_URL='postgresql://…-pooler.…neon.tech/soc_logs?sslmode=require' \
+DEMO_USER_PASSWORD='<a password you choose>' \
+  npm run db:migrate:remote
+```
+
+(`db:migrate` reads `.env` for local work; `db:migrate:remote` takes the URL
+from the environment so it can point anywhere.)
+
+**3. Deploy.**
+
+```bash
+npx vercel link
+npx vercel env add DATABASE_URL production   # the pooled string from step 1
+npx vercel env add AUTH_SECRET production    # openssl rand -base64 32
+npx vercel deploy --prod
+```
+
+**Notes**
+
+- **TLS is automatic.** `src/lib/db.ts` enables verified TLS for any non-local
+  host. If a provider serves a chain Node can't verify, set `PGSSL_NO_VERIFY=true`.
+- **`ANTHROPIC_API_KEY` is intentionally unset in production.** Every upload
+  gets the deterministic brief, which costs nothing, adds no latency inside the
+  request, and can't time out. The UI labels it `rule-generated`, so what you
+  see is what produced it.
+- **The upload route sets `maxDuration = 60`.** Ingest is synchronous, and a
+  cold start against a remote database is slower than local Docker.
+- **The demo login is shared.** Anyone with the URL can sign in and see uploads
+  made under that account. Fine for a demo; change `DEMO_USER_PASSWORD` if you'd
+  rather it weren't guessable from this README.
+
+---
+
 ## Stack
 
 | Layer | Choice | Why |
@@ -63,6 +109,7 @@ npm run db:down    # stop Postgres
 | Database | PostgreSQL 16 (Docker) | Required "modern database"; `JSONB` + array columns fit this data well |
 | DB access | `pg` with hand-written SQL | No ORM: every query is visible and explainable |
 | Auth | JWT in an httpOnly cookie (`jose`) + scrypt password hashing | Basic auth, no third-party dependency |
+| Validation | `zod`, at the `JSONB` boundary only | See [Validation](#validation) — request bodies are checked by hand |
 | AI | Claude (`@anthropic-ai/sdk`), optional | See [How AI is used](#how-ai-is-used) |
 | Tests | Vitest | Parser and detector correctness |
 
@@ -300,6 +347,36 @@ that triggered it, which is what lets the report highlight the specific rows in
 the event table and tag them with the detector responsible. Going from "there is
 a beacon" to "these are the actual requests" is one click.
 
+### Validation
+
+Validation is applied where TypeScript can't help, and deliberately not
+everywhere else.
+
+**Request bodies are checked by hand** at their handlers. Login takes two
+fields; upload checks size and extension; the events endpoint parses two
+integers and clamps them. A schema library there would add indirection without
+adding safety.
+
+**The `JSONB` columns are parsed with zod** (`src/lib/schemas.ts`). This is the
+one genuine trust boundary in the app: `uploads.stats` and `anomalies.evidence`
+are written as JSON and read back later, so a row written by an *older version
+of the code* — a renamed field, a different bucket count — would pass `tsc`
+happily and then throw on first property access in the UI.
+
+Two details worth noting:
+
+- **The types are inferred from the schemas** (`z.infer`), not declared
+  alongside them. Declaring a shape twice is exactly how a validator drifts
+  away from the thing it's meant to validate.
+- **It degrades rather than throws.** A stats blob that fails validation parses
+  to `null`, is logged with the offending field, and the report renders without
+  its aggregate sections — findings and the event table still work. An analyst
+  keeps a partially useful report instead of getting an error page.
+
+Verified by corrupting a real row (`UPDATE uploads SET stats = stats -
+'timeline'`): the page returned 200 with the findings intact, and the server
+logged `expected array, received undefined → at timeline`.
+
 ### Security notes
 
 - Passwords hashed with **scrypt** (`node:crypto`), salt stored with the hash,
@@ -316,7 +393,9 @@ a beacon" to "these are the actual requests" is one click.
   can't be used to enumerate accounts.
 - The brief is rendered through a small closed set of elements, never as raw
   HTML, so nothing in model output can inject markup.
-- Upload limits: 32 MB, extension allow-list.
+- Upload limits: 4 MB, extension allow-list. (Serverless platforms cap request
+  bodies near 4.5 MB, so the limit is set below what the deployed app can
+  actually accept rather than above it.)
 
 ### Accessibility and visual design
 
@@ -335,7 +414,7 @@ readout, and an `aria-label` describing it.
 npm test
 ```
 
-22 tests over the parser and detectors. The ones that matter most:
+30 tests over the parser, detectors, and schemas. The ones that matter most:
 
 - The full 2,296-line sample parses with **zero** malformed lines.
 - Every one of the eight detectors fires on the sample.
@@ -346,6 +425,8 @@ npm test
 - No finding ever reports confidence above 0.97.
 - **`zscaler-benign.log` produces zero findings** — the strongest guard against
   the detectors being noise.
+- Schema drift in a stored rollup is caught, not surfaced as `undefined` three
+  layers later — including a malformed bucket nested inside a valid object.
 
 ---
 
@@ -375,7 +456,7 @@ base date, so they're reproducible and the file contents are stable.
 Built as a functional prototype in the suggested time budget. Things I chose not
 to do, and would do next:
 
-- **Ingest is synchronous.** Fine for the 32 MB limit; a real deployment needs a
+- **Ingest is synchronous.** Fine for the 4 MB limit; a real deployment needs a
   job queue with the upload returning immediately and the UI polling status. The
   `uploads.status` column already exists for this.
 - **Detector thresholds are constants.** They're centralised in `DEFAULT_CONFIG`

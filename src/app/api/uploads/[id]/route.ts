@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { currentUser } from "@/lib/auth";
 import { query } from "@/lib/db";
-import type { UploadStats } from "@/lib/types";
+import { parseEvidence, parseUploadStats } from "@/lib/schemas";
 
 interface UploadRow extends Record<string, unknown> {
   id: string;
@@ -14,7 +14,8 @@ interface UploadRow extends Record<string, unknown> {
   malformed_lines: number;
   range_start: Date | null;
   range_end: Date | null;
-  stats: UploadStats | null;
+  /** Raw JSONB — validated through parseUploadStats before it leaves here. */
+  stats: unknown;
   narrative: string | null;
   narrative_model: string | null;
   created_at: Date;
@@ -33,7 +34,8 @@ interface AnomalyRow extends Record<string, unknown> {
   last_seen: Date | null;
   event_count: number;
   event_line_nos: number[];
-  evidence: Record<string, unknown> | null;
+  /** Raw JSONB — validated through parseEvidence before it leaves here. */
+  evidence: unknown;
 }
 
 /**
@@ -91,7 +93,8 @@ export async function GET(
       narrative: u.narrative,
       narrativeModel: u.narrative_model,
     },
-    stats: u.stats,
+    // Validated on the way out, so a client of this API can trust the shape.
+    stats: parseUploadStats(u.stats),
     anomalies: anomalies.map((a) => ({
       id: a.id,
       detector: a.detector,
@@ -105,7 +108,7 @@ export async function GET(
       lastSeen: a.last_seen,
       eventCount: a.event_count,
       eventLineNos: a.event_line_nos,
-      evidence: a.evidence,
+      evidence: parseEvidence(a.evidence),
     })),
   });
 }

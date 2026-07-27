@@ -3,8 +3,27 @@ import { currentUser } from "@/lib/auth";
 import { query } from "@/lib/db";
 import { IngestError, ingestLogFile } from "@/lib/ingest";
 
-/** Refuse anything larger than this outright rather than OOM the process. */
-const MAX_BYTES = 32 * 1024 * 1024;
+/**
+ * `pg` is a TCP client, so this route cannot run on the edge runtime.
+ * Being explicit stops a future config change from silently breaking it.
+ */
+export const runtime = "nodejs";
+
+/**
+ * Ingest is synchronous — parse, detect, then write events and findings. That
+ * is fast locally but slower against a remote database on a cold start, so the
+ * default function timeout is raised rather than left to chance.
+ */
+export const maxDuration = 60;
+
+/**
+ * Refuse anything larger than this outright rather than OOM the process.
+ *
+ * 4 MB, not more: serverless platforms cap request bodies around 4.5 MB, so a
+ * larger advertised limit would be a promise the deployed app can't keep. The
+ * example logs are well under 1 MB.
+ */
+const MAX_BYTES = 4 * 1024 * 1024;
 const ALLOWED_EXTENSIONS = [".log", ".txt", ".tsv", ".csv"];
 
 interface UploadRow extends Record<string, unknown> {

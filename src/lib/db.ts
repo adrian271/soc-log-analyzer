@@ -8,14 +8,35 @@ import { Pool } from "pg";
  */
 const globalForDb = globalThis as unknown as { __socPool?: Pool };
 
+const LOCAL_DEFAULT = "postgresql://soc:soc_dev_password@localhost:5433/soc_logs";
+const connectionString = process.env.DATABASE_URL ?? LOCAL_DEFAULT;
+
+const isLocal = /@(localhost|127\.0\.0\.1|host\.docker\.internal)[:/]/.test(
+  connectionString,
+);
+
+/**
+ * The Docker Postgres in docker-compose.yml speaks plaintext; every managed
+ * provider (Neon, Supabase, RDS) requires TLS and will refuse the connection
+ * without it. Certificates are verified by default — set PGSSL_NO_VERIFY=true
+ * only if your provider serves a chain Node can't verify.
+ */
+const ssl = isLocal
+  ? undefined
+  : { rejectUnauthorized: process.env.PGSSL_NO_VERIFY !== "true" };
+
+/**
+ * Serverless changes what a "pool" means. Locally one long-lived process owns
+ * the pool, so a larger one is free. On Vercel every warm function instance
+ * holds its own, so `max` is multiplied by the number of live instances and a
+ * generous value exhausts the provider's connection limit under light load.
+ * Keep it small and let a pooled connection string (Neon's `-pooler` endpoint)
+ * do the real multiplexing.
+ */
+const max = isLocal ? 10 : 3;
+
 export const pool: Pool =
-  globalForDb.__socPool ??
-  new Pool({
-    connectionString:
-      process.env.DATABASE_URL ??
-      "postgresql://soc:soc_dev_password@localhost:5433/soc_logs",
-    max: 10,
-  });
+  globalForDb.__socPool ?? new Pool({ connectionString, ssl, max });
 
 if (process.env.NODE_ENV !== "production") globalForDb.__socPool = pool;
 
