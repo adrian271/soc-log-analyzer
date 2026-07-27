@@ -238,8 +238,38 @@ the benign sample, and both fixes are in the code with comments explaining them:
 
 ## How AI is used
 
-**The LLM writes prose. It does not detect anything and it cannot change a
-score.** It is used in exactly one place: `src/lib/narrative.ts`.
+There are **two layers of detection**, and the difference between them is the
+central design decision in this project:
+
+| | Deterministic layer | Model layer |
+|---|---|---|
+| File | `src/lib/detectors.ts` | `src/lib/ai-detection.ts` |
+| Finds | Known patterns (8 detectors) | Novel ones nobody wrote a rule for |
+| Sees | Every event | Only events the first layer did **not** flag |
+| Score is | A measurement you can re-derive | The model's judgement |
+| Confidence ceiling | 0.97 | **0.60, hard-capped** |
+| Reproducible | Byte-identical every run | No — and it is labelled as such |
+| In the UI | The ranked findings list | A separate "Model-proposed leads" section |
+| Affects the timeline / stats | Yes | **No** |
+
+The model layer is **strictly additive**: it never suppresses, reorders or
+rescores a deterministic finding, and it is skipped entirely without an API key.
+
+**Why cap it at 0.60.** A deterministic score is a measurement. A model score is
+an opinion. An opinion should never outrank a measurement in a triage queue, and
+the cap enforces that structurally rather than by convention — a test asserts
+that no model finding can exceed the weakest deterministic one it competes with.
+
+**What the model is not trusted with.** Severity is derived from the capped
+confidence rather than taken from the response; cited line numbers are verified
+to exist and silently dropped if they don't; and the output is schema-constrained
+(structured outputs + zod), so a malformed response is impossible rather than
+merely unlikely.
+
+### The narrative
+
+Separately, `src/lib/narrative.ts` writes prose — and *that* one genuinely
+cannot detect or score anything.
 
 | | |
 |---|---|
@@ -256,9 +286,14 @@ numbers not present in the input.
 
 **Why this split.** An LLM that hallucinates prose is a cosmetic problem. An LLM
 that hallucinates a severity score is a security problem — it produces findings
-nobody can reproduce or defend, and it makes the detection layer untestable.
-Keeping scoring deterministic means the findings are byte-identical across runs
-and covered by unit tests; the model only writes the narration on top.
+nobody can reproduce or defend, and it makes the detection layer untestable. So
+the layer that *can* be measured is measured, and the layer that can't is capped,
+labelled, and quarantined into its own section of the report.
+
+The honest trade-off: the deterministic engine only finds what someone thought to
+encode, and the model layer exists precisely to cover that blind spot — at the
+cost of findings that can't be reproduced. Neither is sufficient alone; the point
+is that the product never lets you confuse one for the other.
 
 Sending only aggregates also keeps the prompt small and bounded regardless of
 file size, and avoids shipping the full contents of a customer's proxy log to a
