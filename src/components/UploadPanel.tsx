@@ -98,6 +98,46 @@ export function UploadPanel() {
           ⚠ {error}
         </p>
       )}
+
+      {/*
+        Someone using the hosted app has no log to hand unless they clone the
+        repo, which makes the whole thing unusable as a demo. These are the same
+        files committed under examples/.
+      */}
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[var(--text-muted)]">
+        <span>No log handy? Download a sample:</span>
+        <SampleLink
+          name="zscaler-sample.log"
+          label="With attacks"
+          title="~2,300 events of ordinary traffic with seven attack scenarios seeded in"
+        />
+        <SampleLink
+          name="zscaler-benign.log"
+          label="Clean traffic"
+          title="Normal traffic only — should produce zero findings"
+        />
+      </div>
     </div>
+  );
+}
+
+function SampleLink({
+  name,
+  label,
+  title,
+}: {
+  name: string;
+  label: string;
+  title: string;
+}) {
+  return (
+    <a
+      href={`/api/examples/${name}`}
+      download={name}
+      title={title}
+      className="underline underline-offset-2 hover:text-[var(--series-1)]"
+    >
+      ↓ {label}
+    </a>
   );
 }
