@@ -19,13 +19,37 @@ const connectionString =
 const DEMO_EMAIL = process.env.DEMO_USER_EMAIL ?? "analyst@tenex.local";
 const DEMO_PASSWORD = process.env.DEMO_USER_PASSWORD ?? "SocAnalyst!2024";
 
-const client = new pg.Client({ connectionString });
+/**
+ * Same rule as src/lib/db.ts: the Docker Postgres speaks plaintext, every
+ * managed provider requires TLS.
+ *
+ * `pg` will pick up `sslmode=require` from the connection string on its own,
+ * but a string pasted without that parameter silently gets no TLS and the
+ * provider closes the connection — a confusing failure for a one-off command.
+ * Deciding it from the host removes that footgun.
+ */
+const isLocal = /@(localhost|127\.0\.0\.1|host\.docker\.internal)[:/]/.test(
+  connectionString,
+);
+const ssl = isLocal
+  ? undefined
+  : { rejectUnauthorized: process.env.PGSSL_NO_VERIFY !== "true" };
+
+const client = new pg.Client({ connectionString, ssl });
 
 try {
   await client.connect();
 } catch (err) {
-  console.error(`\nCould not connect to Postgres at ${connectionString}`);
-  console.error("Is the database running?  ->  docker compose up -d\n");
+  // Redact the password before printing — this command is usually run with a
+  // production connection string pasted into a shared terminal.
+  const safe = connectionString.replace(/:\/\/([^:]+):[^@]*@/, "://$1:****@");
+  console.error(`\nCould not connect to Postgres at ${safe}`);
+  console.error(
+    isLocal
+      ? "Is the database running?  ->  docker compose up -d\n"
+      : "Check the connection string, and that it is the POOLED endpoint\n" +
+          "(the host should contain '-pooler').\n",
+  );
   console.error(err.message);
   process.exit(1);
 }

@@ -83,3 +83,10 @@ CREATE TABLE IF NOT EXISTS anomalies (
 );
 
 CREATE INDEX IF NOT EXISTS anomalies_upload_idx ON anomalies (upload_id, confidence DESC);
+
+-- Which layer produced a finding: 'deterministic' (the eight rule/statistic
+-- detectors) or 'model' (the LLM pass over what those detectors did not flag).
+-- The two are never mixed in the UI, so the distinction has to survive storage.
+-- Written as an idempotent ALTER because schema.sql is re-applied on migrate.
+ALTER TABLE anomalies
+  ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'deterministic';

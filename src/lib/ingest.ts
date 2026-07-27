@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 import { transaction } from "./db";
 import { parseLogFile } from "./parser";
 import { detectAnomalies } from "./detectors";
+import { detectWithModel } from "./ai-detection";
 import { computeStats } from "./analysis";
 import { writeNarrative } from "./narrative";
 import type { Anomaly, LogEvent } from "./types";
@@ -15,6 +16,8 @@ export interface IngestResult {
   parsedLines: number;
   malformedLines: number;
   anomalyCount: number;
+  /** Model-proposed leads, reported separately from the measured findings. */
+  modelFindingCount: number;
 }
 
 /**
@@ -41,6 +44,23 @@ export async function ingestLogFile(
   }
 
   const anomalies = detectAnomalies(events);
+
+  // Second detection layer. It runs over the events the rules engine did not
+  // flag, is strictly additive, and is awaited here (rather than after the
+  // transaction like the narrative) so its findings are stored atomically with
+  // everything else. It resolves to an empty list on any failure, including a
+  // missing API key, so this never blocks an upload.
+  const modelPass = await detectWithModel(events, anomalies);
+  if (modelPass.skipped) {
+    console.info(`[ai-detection] skipped: ${modelPass.skipped}`);
+  } else {
+    console.info(
+      `[ai-detection] ${modelPass.anomalies.length} finding(s) from ${modelPass.residueSize} unflagged events`,
+    );
+  }
+
+  // Stats are computed from the deterministic findings only. A model-proposed
+  // lead should not repaint the timeline as though it were a confirmed event.
   const stats = computeStats(events, anomalies);
 
   const range = events.reduce(
@@ -73,7 +93,8 @@ export async function ingestLogFile(
     const id = upload.rows[0].id;
 
     await insertEvents(client, id, events);
-    await insertAnomalies(client, id, anomalies);
+    await insertAnomalies(client, id, anomalies, "deterministic");
+    await insertAnomalies(client, id, modelPass.anomalies, "model");
     return id;
   });
 
@@ -89,6 +110,7 @@ export async function ingestLogFile(
     parsedLines: events.length,
     malformedLines: malformed.length,
     anomalyCount: anomalies.length,
+    modelFindingCount: modelPass.anomalies.length,
   };
 }
 
@@ -133,17 +155,19 @@ async function insertAnomalies(
   client: PoolClient,
   uploadId: string,
   anomalies: Anomaly[],
+  source: "deterministic" | "model",
 ): Promise<void> {
   for (const a of anomalies) {
     await client.query(
       `INSERT INTO anomalies
          (upload_id, detector, title, severity, confidence, explanation, entity,
-          entity_kind, first_seen, last_seen, event_count, event_line_nos, evidence)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+          entity_kind, first_seen, last_seen, event_count, event_line_nos,
+          evidence, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [
         uploadId, a.detector, a.title, a.severity, a.confidence, a.explanation,
         a.entity, a.entityKind, a.firstSeen, a.lastSeen, a.eventCount,
-        a.eventLineNos, JSON.stringify(a.evidence),
+        a.eventLineNos, JSON.stringify(a.evidence), source,
       ],
     );
   }

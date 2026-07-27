@@ -45,41 +45,54 @@ const USERS = [];
 const FIRST = ["alice", "bob", "carol", "dan", "erin", "frank", "grace", "heidi",
   "ivan", "judy", "ken", "lena", "mallory", "niaj", "olivia", "peggy", "quinn",
   "rupert", "sybil", "trent", "uma", "victor", "wendy", "xavier"];
-for (let i = 0; i < FIRST.length; i++) {
-  USERS.push({
-    name: `${FIRST[i]}@tenex.local`,
-    dept: DEPARTMENTS[i % DEPARTMENTS.length],
-    loc: LOCATIONS[i % LOCATIONS.length],
-    ip: `10.10.${1 + (i % 4)}.${20 + i}`,
-  });
-}
-
 const BROWSER_UAS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
 ];
 
-/** host -> [category, typical server ip prefix] */
+for (let i = 0; i < FIRST.length; i++) {
+  USERS.push({
+    name: `${FIRST[i]}@tenex.local`,
+    dept: DEPARTMENTS[i % DEPARTMENTS.length],
+    loc: LOCATIONS[i % LOCATIONS.length],
+    ip: `10.10.${1 + (i % 4)}.${20 + i}`,
+    // A person has one laptop. An earlier version picked a user-agent at
+    // random per request, which made every user appear to switch between
+    // Windows Chrome and macOS Safari between page loads — a genuine
+    // indicator in real traffic, and pure noise here. The model-detection
+    // eval caught it, which is exactly what that eval is for.
+    ua: BROWSER_UAS[i % BROWSER_UAS.length],
+  });
+}
+
+/**
+ * host -> [category, server ip prefix, acceptsPost]
+ *
+ * `acceptsPost` marks sites where a POST is normal — webmail, chat, source
+ * control, SaaS apps. A read-only news site or a static CDN receiving
+ * multi-kilobyte POSTs is itself an anomaly, so generating them at random
+ * planted a signal in traffic that is supposed to be unremarkable.
+ */
 const BENIGN_SITES = [
-  ["www.google.com", "Search Engines", "142.250.72"],
-  ["mail.google.com", "Webmail", "142.250.72"],
-  ["github.com", "Professional Services", "140.82.113"],
-  ["api.github.com", "Professional Services", "140.82.114"],
-  ["outlook.office365.com", "Webmail", "52.96.40"],
-  ["teams.microsoft.com", "Instant Messaging", "52.113.194"],
-  ["slack.com", "Instant Messaging", "3.89.11"],
-  ["www.atlassian.net", "Professional Services", "104.192.142"],
-  ["registry.npmjs.org", "Software Downloads", "104.16.24"],
-  ["s3.us-east-1.amazonaws.com", "Web Hosting", "52.216.35"],
-  ["console.aws.amazon.com", "Professional Services", "99.84.108"],
-  ["www.linkedin.com", "Social Networking", "13.107.42"],
-  ["www.nytimes.com", "News and Media", "151.101.65"],
-  ["cdn.jsdelivr.net", "Content Servers", "104.16.85"],
-  ["www.salesforce.com", "Professional Services", "104.109.10"],
-  ["zoom.us", "Streaming Media", "170.114.52"],
-  ["stackoverflow.com", "Professional Services", "104.18.32"],
-  ["docs.google.com", "Professional Services", "142.250.80"],
+  ["www.google.com", "Search Engines", "142.250.72", false],
+  ["mail.google.com", "Webmail", "142.250.72", true],
+  ["github.com", "Professional Services", "140.82.113", true],
+  ["api.github.com", "Professional Services", "140.82.114", true],
+  ["outlook.office365.com", "Webmail", "52.96.40", true],
+  ["teams.microsoft.com", "Instant Messaging", "52.113.194", true],
+  ["slack.com", "Instant Messaging", "3.89.11", true],
+  ["www.atlassian.net", "Professional Services", "104.192.142", true],
+  ["registry.npmjs.org", "Software Downloads", "104.16.24", false],
+  ["s3.us-east-1.amazonaws.com", "Web Hosting", "52.216.35", false],
+  ["console.aws.amazon.com", "Professional Services", "99.84.108", true],
+  ["www.linkedin.com", "Social Networking", "13.107.42", true],
+  ["www.nytimes.com", "News and Media", "151.101.65", false],
+  ["cdn.jsdelivr.net", "Content Servers", "104.16.85", false],
+  ["www.salesforce.com", "Professional Services", "104.109.10", true],
+  ["zoom.us", "Streaming Media", "170.114.52", false],
+  ["stackoverflow.com", "Professional Services", "104.18.32", true],
+  ["docs.google.com", "Professional Services", "142.250.80", true],
 ];
 
 const BENIGN_PATHS = ["/", "/index.html", "/api/v1/status", "/assets/app.js",
@@ -130,12 +143,12 @@ function benignTraffic(count) {
   const out = [];
   for (let i = 0; i < count; i++) {
     const u = pick(USERS);
-    const [host, category, ipPrefix] = pick(BENIGN_SITES);
+    const [host, category, ipPrefix, acceptsPost] = pick(BENIGN_SITES);
     // Working hours 08:00-18:00 UTC, weighted toward mid-morning.
     const hourOffset = 2 + rand() * 10;
     const ms = BASE + hourOffset * HOUR + between(0, 3599) * 1000;
     const path = pick(BENIGN_PATHS);
-    const isPost = rand() < 0.12;
+    const isPost = acceptsPost && rand() < 0.18;
     out.push({
       ms,
       line: row({
@@ -153,7 +166,7 @@ function benignTraffic(count) {
         reqSize: isPost ? between(800, 9000) : between(200, 1400),
         respSize: between(500, 90000),
         category,
-        ua: pick(BROWSER_UAS),
+        ua: u.ua,
         app: host.includes("office365") || host.includes("microsoft")
           ? "Microsoft 365" : "-",
       }),
@@ -307,7 +320,8 @@ function scenarioMalware() {
         category: threat.startsWith("Phish") ? "Phishing" : "Malicious Sites",
         threat,
         risk: 95,
-        ua: pick(BROWSER_UAS),
+        // A real user clicking a bad link uses their own browser.
+        ua: u.ua,
       }),
     });
     ms += between(30, 400) * 1000;
@@ -378,7 +392,7 @@ function scenarioDga() {
         respSize: between(0, 500),
         category: "Newly Registered Domains",
         risk: 65,
-        ua: BROWSER_UAS[0],
+        ua: u.ua,
       }),
     });
     ms += between(2, 25) * 1000;
@@ -416,7 +430,7 @@ function scenarioOffHours() {
         respSize: i % 3 === 2 ? between(300, 900) : between(400_000, 3_000_000),
         category: cat,
         risk: 20,
-        ua: BROWSER_UAS[1],
+        ua: u.ua,
       }),
     });
     ms += between(60, 300) * 1000;

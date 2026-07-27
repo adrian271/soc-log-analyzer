@@ -36,6 +36,7 @@ interface AnomalyRow extends Record<string, unknown> {
   event_line_nos: number[];
   /** Raw JSONB — validated through parseEvidence before it leaves here. */
   evidence: unknown;
+  source: string;
 }
 
 /**
@@ -71,7 +72,8 @@ export async function GET(
 
   const anomalies = await query<AnomalyRow>(
     `SELECT id, detector, title, severity, confidence, explanation, entity,
-            entity_kind, first_seen, last_seen, event_count, event_line_nos, evidence
+            entity_kind, first_seen, last_seen, event_count, event_line_nos,
+            evidence, source
        FROM anomalies
       WHERE upload_id = $1
       ORDER BY confidence DESC, id ASC`,
@@ -95,22 +97,31 @@ export async function GET(
     },
     // Validated on the way out, so a client of this API can trust the shape.
     stats: parseUploadStats(u.stats),
-    anomalies: anomalies.map((a) => ({
-      id: a.id,
-      detector: a.detector,
-      title: a.title,
-      severity: a.severity,
-      confidence: a.confidence,
-      explanation: a.explanation,
-      entity: a.entity,
-      entityKind: a.entity_kind,
-      firstSeen: a.first_seen,
-      lastSeen: a.last_seen,
-      eventCount: a.event_count,
-      eventLineNos: a.event_line_nos,
-      evidence: parseEvidence(a.evidence),
-    })),
+    // The two detection layers are returned as separate collections rather
+    // than one list with a flag, so a consumer cannot accidentally rank a
+    // model-proposed lead alongside a measured finding.
+    anomalies: anomalies.filter((a) => a.source !== "model").map(toApi),
+    modelFindings: anomalies.filter((a) => a.source === "model").map(toApi),
   });
+}
+
+function toApi(a: AnomalyRow) {
+  return {
+    id: a.id,
+    detector: a.detector,
+    title: a.title,
+    severity: a.severity,
+    confidence: a.confidence,
+    explanation: a.explanation,
+    entity: a.entity,
+    entityKind: a.entity_kind,
+    firstSeen: a.first_seen,
+    lastSeen: a.last_seen,
+    eventCount: a.event_count,
+    eventLineNos: a.event_line_nos,
+    evidence: parseEvidence(a.evidence),
+    source: a.source,
+  };
 }
 
 /** DELETE /api/uploads/:id — cascades to events and anomalies. */

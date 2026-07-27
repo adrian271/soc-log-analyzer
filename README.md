@@ -238,8 +238,38 @@ the benign sample, and both fixes are in the code with comments explaining them:
 
 ## How AI is used
 
-**The LLM writes prose. It does not detect anything and it cannot change a
-score.** It is used in exactly one place: `src/lib/narrative.ts`.
+There are **two layers of detection**, and the difference between them is the
+central design decision in this project:
+
+| | Deterministic layer | Model layer |
+|---|---|---|
+| File | `src/lib/detectors.ts` | `src/lib/ai-detection.ts` |
+| Finds | Known patterns (8 detectors) | Novel ones nobody wrote a rule for |
+| Sees | Every event | Only events the first layer did **not** flag |
+| Score is | A measurement you can re-derive | The model's judgement |
+| Confidence ceiling | 0.97 | **0.60, hard-capped** |
+| Reproducible | Byte-identical every run | No — and it is labelled as such |
+| In the UI | The ranked findings list | A separate "Model-proposed leads" section |
+| Affects the timeline / stats | Yes | **No** |
+
+The model layer is **strictly additive**: it never suppresses, reorders or
+rescores a deterministic finding, and it is skipped entirely without an API key.
+
+**Why cap it at 0.60.** A deterministic score is a measurement. A model score is
+an opinion. An opinion should never outrank a measurement in a triage queue, and
+the cap enforces that structurally rather than by convention — a test asserts
+that no model finding can exceed the weakest deterministic one it competes with.
+
+**What the model is not trusted with.** Severity is derived from the capped
+confidence rather than taken from the response; cited line numbers are verified
+to exist and silently dropped if they don't; and the output is schema-constrained
+(structured outputs + zod), so a malformed response is impossible rather than
+merely unlikely.
+
+### The narrative
+
+Separately, `src/lib/narrative.ts` writes prose — and *that* one genuinely
+cannot detect or score anything.
 
 | | |
 |---|---|
@@ -256,9 +286,14 @@ numbers not present in the input.
 
 **Why this split.** An LLM that hallucinates prose is a cosmetic problem. An LLM
 that hallucinates a severity score is a security problem — it produces findings
-nobody can reproduce or defend, and it makes the detection layer untestable.
-Keeping scoring deterministic means the findings are byte-identical across runs
-and covered by unit tests; the model only writes the narration on top.
+nobody can reproduce or defend, and it makes the detection layer untestable. So
+the layer that *can* be measured is measured, and the layer that can't is capped,
+labelled, and quarantined into its own section of the report.
+
+The honest trade-off: the deterministic engine only finds what someone thought to
+encode, and the model layer exists precisely to cover that blind spot — at the
+cost of findings that can't be reproduced. Neither is sufficient alone; the point
+is that the product never lets you confuse one for the other.
 
 Sending only aggregates also keeps the prompt small and bounded regardless of
 file size, and avoids shipping the full contents of a customer's proxy log to a
@@ -414,7 +449,8 @@ readout, and an `aria-label` describing it.
 npm test
 ```
 
-30 tests over the parser, detectors, and schemas. The ones that matter most:
+39 tests over the parser, detectors, schemas, and the model layer's guardrails.
+The ones that matter most:
 
 - The full 2,296-line sample parses with **zero** malformed lines.
 - Every one of the eight detectors fires on the sample.
@@ -427,6 +463,55 @@ npm test
   the detectors being noise.
 - Schema drift in a stored rollup is caught, not surfaced as `undefined` three
   layers later — including a malformed bucket nested inside a valid object.
+- A model finding can never outrank the weakest deterministic one, its severity
+  is derived rather than trusted, and hallucinated line numbers are dropped.
+
+### Evaluating the model layer
+
+```bash
+npm run eval:ai      # needs a valid ANTHROPIC_API_KEY; makes real API calls
+```
+
+Kept out of `npm test` deliberately: it costs money, needs network, and is
+non-deterministic, so the normal suite stays fast and runs with no credentials.
+
+It applies to the model layer the **same bar the deterministic detectors had to
+clear**: run it against `zscaler-benign.log`, where nothing is wrong, and it must
+not escalate anything. A layer that invents findings in clean traffic isn't a
+detector, it's a noise generator — and it's worse than nothing, because analysts
+learn to ignore the section it lives in. If it can't clear that bar, revert it
+rather than ship it.
+
+The eval also asserts the residue boundary holds (the model never cites a line
+the rules engine already flagged) and prints the findings for a human to judge.
+**Zero findings is an acceptable result; plausible-but-unverifiable is not.**
+
+**Current result:**
+
+| File | Model findings |
+|---|---|
+| `zscaler-benign.log` (900 events, nothing wrong) | **0** |
+| `zscaler-sample.log` (1,810 events the rules engine ignored) | **1** |
+
+That single finding is the case the layer was built for. It flagged a blocked
+request to `hbuqdvwdlvvuq.top` — a generated domain that scores **0.514** on
+`dgaScore`, just under the detector's 0.55 threshold, so the deterministic layer
+excluded it from the 28 it did catch. A rule drew a line and something real sat
+0.036 below it.
+
+**How the eval earned its place.** On its first run the model reported three
+findings on "benign" traffic — chiefly that users were switching between Windows
+Chrome and macOS Safari between page loads. It was right: the log generator was
+picking a user-agent at random *per request*, so every user appeared to change
+operating system constantly. That is a genuine indicator in real traffic and pure
+noise here. The generator now assigns one browser per user (and stops POSTing to
+read-only news sites), and the model went silent on the clean file. The eval
+caught a defect in the test data before it could be mistaken for a model defect.
+
+**Caveat worth stating plainly:** this layer is **not deterministic**. Two runs
+over identical input returned two and three findings. That is inherent to the
+approach and is why its output is capped, labelled, and quarantined from the
+measured findings rather than ranked alongside them.
 
 ---
 
@@ -440,7 +525,7 @@ base date, so they're reproducible and the file contents are stable.
 | # | Scenario | What it looks like |
 |---|---|---|
 | 1 | C2 beaconing | 90 callbacks to `cdn-analytics-sync.top` at 60s ±1.5s |
-| 2 | Data exfiltration | 887 MB uploaded to `upload.anonfiles-cdn.ru` at 22:30 |
+| 2 | Data exfiltration | 981 MB uploaded to `upload.anonfiles-cdn.ru` at 22:30 |
 | 3 | Scanning burst | 260 requests in ~2 min across admin/`.env`/`.git` paths |
 | 4 | Malware & phishing | Blocked Emotet, InstallCore, and an O365 credential phish |
 | 5 | Brute force | 70 failed VPN logins, then one success |

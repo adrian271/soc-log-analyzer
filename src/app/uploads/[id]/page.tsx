@@ -35,6 +35,7 @@ interface AnomalyRow extends Record<string, unknown> {
   event_count: number;
   /** Raw JSONB — validated through parseEvidence before use. */
   evidence: unknown;
+  source: string;
 }
 
 export default async function ReportPage({
@@ -63,14 +64,14 @@ export default async function ReportPage({
 
   const anomalyRows = await query<AnomalyRow>(
     `SELECT id, detector, title, severity, confidence, explanation, entity,
-            first_seen, last_seen, event_count, evidence
+            first_seen, last_seen, event_count, evidence, source
        FROM anomalies
       WHERE upload_id = $1
       ORDER BY confidence DESC, id ASC`,
     [id],
   );
 
-  const anomalies: AnomalyView[] = anomalyRows.map((a) => ({
+  const toView = (a: AnomalyRow): AnomalyView => ({
     id: a.id,
     detector: a.detector,
     title: a.title,
@@ -82,7 +83,11 @@ export default async function ReportPage({
     lastSeen: a.last_seen,
     eventCount: a.event_count,
     evidence: parseEvidence(a.evidence),
-  }));
+  });
+
+  // The two layers stay in separate lists all the way to the screen.
+  const anomalies = anomalyRows.filter((a) => a.source !== "model").map(toView);
+  const modelFindings = anomalyRows.filter((a) => a.source === "model").map(toView);
 
   const critical = anomalies.filter((a) => a.severity === "critical").length;
   const high = anomalies.filter((a) => a.severity === "high").length;
@@ -201,6 +206,40 @@ export default async function ReportPage({
             </div>
           )}
         </section>
+
+        {/*
+          The second detection layer. Deliberately below the measured findings,
+          in its own bordered container, with the caveat stated before the
+          content — a model-proposed lead should never be mistaken for a
+          finding with a number behind it.
+        */}
+        {modelFindings.length > 0 && (
+          <section>
+            <div className="flex items-baseline justify-between gap-4 mb-1">
+              <h2 className="text-sm font-medium text-[var(--text-secondary)]">
+                Model-proposed leads
+              </h2>
+              <span className="text-xs text-[var(--text-muted)] tabular">
+                {modelFindings.length} unverified
+              </span>
+            </div>
+            <p className="text-xs text-[var(--text-muted)] mb-4 max-w-3xl leading-relaxed">
+              Produced by a language model reviewing the events the deterministic
+              detectors did <em>not</em> flag — the patterns nobody wrote a rule
+              for. These are <strong>leads, not measurements</strong>: the scores
+              reflect the model&apos;s judgement rather than a computed deviation,
+              they are capped at {Math.round(0.6 * 100)}% so they can never
+              outrank a measured finding, and they do not affect the timeline or
+              the statistics above. Verify before acting.
+            </p>
+
+            <div className="rounded-xl border border-dashed border-[var(--border)] p-3 space-y-3">
+              {modelFindings.map((a) => (
+                <AnomalyCard key={a.id} anomaly={a} />
+              ))}
+            </div>
+          </section>
+        )}
 
         {stats && (
           <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
