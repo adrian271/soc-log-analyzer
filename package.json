@@ -16,7 +16,8 @@
     "test:watch": "vitest",
     "db:migrate:remote": "node scripts/migrate.mjs",
     "eval:ai": "vitest run --config vitest.eval.config.ts",
-    "db:set-password": "node scripts/set-password.mjs"
+    "db:set-password": "node scripts/set-password.mjs",
+    "db:reset:remote": "node scripts/reset-data.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
