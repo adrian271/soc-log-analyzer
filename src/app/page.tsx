@@ -1,65 +1,119 @@
-import Image from "next/image";
+import Link from "next/link";
+import { redirect } from "next/navigation";
+import { currentUser } from "@/lib/auth";
+import { query } from "@/lib/db";
+import { AppHeader } from "@/components/AppHeader";
+import { UploadPanel } from "@/components/UploadPanel";
 
-export default function Home() {
+interface Row extends Record<string, unknown> {
+  id: string;
+  filename: string;
+  parsed_lines: number;
+  malformed_lines: number;
+  range_start: Date | null;
+  range_end: Date | null;
+  created_at: Date;
+  anomaly_count: string;
+  critical_count: string;
+}
+
+export default async function DashboardPage() {
+  // The proxy already redirects unauthenticated browsers; this is the
+  // authoritative check, and it also gives us the user record.
+  const user = await currentUser();
+  if (!user) redirect("/login");
+
+  const uploads = await query<Row>(
+    `SELECT u.id, u.filename, u.parsed_lines, u.malformed_lines,
+            u.range_start, u.range_end, u.created_at,
+            (SELECT count(*) FROM anomalies a WHERE a.upload_id = u.id) AS anomaly_count,
+            (SELECT count(*) FROM anomalies a
+              WHERE a.upload_id = u.id AND a.severity = 'critical') AS critical_count
+       FROM uploads u
+      WHERE u.user_id = $1
+      ORDER BY u.created_at DESC
+      LIMIT 50`,
+    [user.id],
+  );
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <>
+      <AppHeader email={user.email} />
+
+      <main className="flex-1 mx-auto w-full max-w-6xl px-4 py-8 space-y-8">
+        <section>
+          <h1 className="text-xl font-semibold tracking-tight">
+            Analyse a log file
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+          <p className="mt-1 mb-4 text-sm text-[var(--text-secondary)]">
+            Parsing, detection and scoring all run on upload.
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+          <UploadPanel />
+        </section>
+
+        <section>
+          <h2 className="text-sm font-medium text-[var(--text-secondary)] mb-3">
+            Previous analyses
+          </h2>
+
+          {uploads.length === 0 ? (
+            <div className="card p-8 text-center text-sm text-[var(--text-muted)]">
+              Nothing analysed yet. Try{" "}
+              <code className="text-[var(--text-secondary)]">
+                examples/zscaler-sample.log
+              </code>{" "}
+              from the repository.
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {uploads.map((u) => {
+                const anomalies = Number(u.anomaly_count);
+                const critical = Number(u.critical_count);
+                return (
+                  <li key={u.id}>
+                    <Link
+                      href={`/uploads/${u.id}`}
+                      className="card px-4 py-3 flex items-center justify-between gap-4 hover:bg-[var(--surface-2)] transition-colors"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-medium truncate">{u.filename}</p>
+                        <p className="text-xs text-[var(--text-muted)] tabular mt-0.5">
+                          {u.parsed_lines.toLocaleString()} events
+                          {u.malformed_lines > 0 &&
+                            ` · ${u.malformed_lines} unparsed`}
+                          {u.range_start &&
+                            ` · ${new Date(u.range_start).toISOString().slice(0, 10)}`}
+                        </p>
+                      </div>
+
+                      <div className="shrink-0 text-right">
+                        {anomalies === 0 ? (
+                          <span className="text-xs text-[var(--status-good)]">
+                            ✓ Clean
+                          </span>
+                        ) : (
+                          <span className="text-xs">
+                            <span className="tabular font-medium">
+                              {anomalies}
+                            </span>{" "}
+                            finding{anomalies === 1 ? "" : "s"}
+                            {critical > 0 && (
+                              <span className="text-[var(--status-critical)]">
+                                {" "}
+                                · {critical} critical
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </div>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
       </main>
-    </div>
+    </>
   );
 }
