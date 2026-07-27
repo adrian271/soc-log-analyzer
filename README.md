@@ -449,7 +449,8 @@ readout, and an `aria-label` describing it.
 npm test
 ```
 
-30 tests over the parser, detectors, and schemas. The ones that matter most:
+39 tests over the parser, detectors, schemas, and the model layer's guardrails.
+The ones that matter most:
 
 - The full 2,296-line sample parses with **zero** malformed lines.
 - Every one of the eight detectors fires on the sample.
@@ -485,6 +486,33 @@ The eval also asserts the residue boundary holds (the model never cites a line
 the rules engine already flagged) and prints the findings for a human to judge.
 **Zero findings is an acceptable result; plausible-but-unverifiable is not.**
 
+**Current result:**
+
+| File | Model findings |
+|---|---|
+| `zscaler-benign.log` (900 events, nothing wrong) | **0** |
+| `zscaler-sample.log` (1,810 events the rules engine ignored) | **1** |
+
+That single finding is the case the layer was built for. It flagged a blocked
+request to `hbuqdvwdlvvuq.top` — a generated domain that scores **0.514** on
+`dgaScore`, just under the detector's 0.55 threshold, so the deterministic layer
+excluded it from the 28 it did catch. A rule drew a line and something real sat
+0.036 below it.
+
+**How the eval earned its place.** On its first run the model reported three
+findings on "benign" traffic — chiefly that users were switching between Windows
+Chrome and macOS Safari between page loads. It was right: the log generator was
+picking a user-agent at random *per request*, so every user appeared to change
+operating system constantly. That is a genuine indicator in real traffic and pure
+noise here. The generator now assigns one browser per user (and stops POSTing to
+read-only news sites), and the model went silent on the clean file. The eval
+caught a defect in the test data before it could be mistaken for a model defect.
+
+**Caveat worth stating plainly:** this layer is **not deterministic**. Two runs
+over identical input returned two and three findings. That is inherent to the
+approach and is why its output is capped, labelled, and quarantined from the
+measured findings rather than ranked alongside them.
+
 ---
 
 ## Example logs
@@ -497,7 +525,7 @@ base date, so they're reproducible and the file contents are stable.
 | # | Scenario | What it looks like |
 |---|---|---|
 | 1 | C2 beaconing | 90 callbacks to `cdn-analytics-sync.top` at 60s ±1.5s |
-| 2 | Data exfiltration | 887 MB uploaded to `upload.anonfiles-cdn.ru` at 22:30 |
+| 2 | Data exfiltration | 981 MB uploaded to `upload.anonfiles-cdn.ru` at 22:30 |
 | 3 | Scanning burst | 260 requests in ~2 min across admin/`.env`/`.git` paths |
 | 4 | Malware & phishing | Blocked Emotet, InstallCore, and an O365 credential phish |
 | 5 | Brute force | 70 failed VPN logins, then one success |
