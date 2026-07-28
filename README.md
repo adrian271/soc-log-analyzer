@@ -4,6 +4,11 @@ Upload a web proxy log, get back a triaged incident report: a timeline of what
 happened, a ranked list of findings, and — for each finding — a plain-English
 explanation of *why* it was flagged plus a confidence score.
 
+**Live demo:** [soc-log-analyzer-adrian.vercel.app](https://soc-log-analyzer-adrian.vercel.app)
+— sign-in details are shared with the submission. Once signed in, the upload panel
+links to the same sample logs committed under `examples/`, so you can try it
+without cloning anything.
+
 Built for the Tenex full-stack cybersecurity take-home.
 
 ---
@@ -44,65 +49,22 @@ npm test           # parser + detector unit tests (Vitest)
 npm run typecheck  # tsc --noEmit
 npm run build      # production build
 npm run gen:logs   # regenerate the example logs (deterministic)
-npm run db:reset   # wipe and recreate the database
+npm run db:reset   # wipe and recreate the local database
 npm run db:down    # stop Postgres
+npm run eval:ai    # hold the model layer to the clean-file bar (needs an API key)
+```
+
+Against a **remote** database — each takes `DATABASE_URL` from the environment:
+
+```bash
+DATABASE_URL='…' npm run db:migrate:remote   # apply schema, seed the demo user
+DATABASE_URL='…' npm run db:set-password     # rotate a password (stdin, no echo)
+DATABASE_URL='…' npm run db:reset:remote     # clear uploads, keep accounts
 ```
 </details>
 
 > **Port note:** Postgres is published on **5433**, not 5432, so it won't collide
 > with an existing local Postgres.
-
----
-
-## Deploying
-
-The app runs on Vercel with any managed Postgres. Nothing about it is
-Vercel-specific — it's a standard Next.js app plus a `DATABASE_URL`.
-
-**1. Create a Postgres database.** On [Neon](https://neon.tech), create a
-project and copy the **pooled** connection string — the host contains `-pooler`.
-The pooler is what keeps serverless functions from exhausting the connection
-limit; the direct endpoint will work until it suddenly doesn't.
-
-**2. Apply the schema and seed the demo user**, from your machine:
-
-```bash
-DATABASE_URL='postgresql://…-pooler.…neon.tech/soc_logs?sslmode=require' \
-DEMO_USER_PASSWORD='<a password you choose>' \
-  npm run db:migrate:remote
-```
-
-(`db:migrate` reads `.env` for local work; `db:migrate:remote` takes the URL
-from the environment so it can point anywhere.)
-
-**3. Deploy.**
-
-```bash
-npx vercel link
-npx vercel env add DATABASE_URL production   # the pooled string from step 1
-npx vercel env add AUTH_SECRET production    # openssl rand -base64 32
-npx vercel deploy --prod
-```
-
-**Notes**
-
-- **End the connection string with `?sslmode=verify-full`,** not `?sslmode=require`.
-  The two behave identically today, but `pg` v9 redefines `require` as
-  encrypt-without-verifying — so `require` silently weakens the connection on a
-  future dependency bump, and logs a deprecation warning until then.
-- **TLS is otherwise automatic.** `src/lib/db.ts` enables verified TLS for any
-  non-local host. Note that when the URL carries an `sslmode`, `pg` builds its
-  own config from it and ignores the one in code — so `PGSSL_NO_VERIFY` only
-  applies to URLs with no `sslmode`, and the app warns if you set both.
-- **`ANTHROPIC_API_KEY` is intentionally unset in production.** Every upload
-  gets the deterministic brief, which costs nothing, adds no latency inside the
-  request, and can't time out. The UI labels it `rule-generated`, so what you
-  see is what produced it.
-- **The upload route sets `maxDuration = 60`.** Ingest is synchronous, and a
-  cold start against a remote database is slower than local Docker.
-- **The demo login is shared.** Anyone with the URL can sign in and see uploads
-  made under that account. Fine for a demo; change `DEMO_USER_PASSWORD` if you'd
-  rather it weren't guessable from this README.
 
 ---
 
@@ -153,9 +115,13 @@ rather than drifting with the server's local timezone.
 
 ## Anomaly detection
 
-**All detection is deterministic** — statistics and rules, no model inference.
-Eight detectors run over the parsed events in `src/lib/detectors.ts`.
+Detection runs in **two layers**. This section covers the first — eight
+deterministic detectors in `src/lib/detectors.ts` that produce every finding in
+the report's ranked list. The second is model-based and covered under
+[How AI is used](#how-ai-is-used); it is strictly additive and its output is
+kept separate throughout.
 
+**The first layer uses no model inference at all** — statistics and rules only.
 That is a deliberate choice for a security tool. An analyst has to be able to
 ask *"why did this fire?"* and get an answer they can re-derive from the log
 themselves. So every finding carries the observed numbers in its explanation
@@ -455,7 +421,7 @@ readout, and an `aria-label` describing it.
 npm test
 ```
 
-39 tests over the parser, detectors, schemas, and the model layer's guardrails.
+40 tests over the parser, detectors, schemas, and the model layer's guardrails.
 The ones that matter most:
 
 - The full 2,296-line sample parses with **zero** malformed lines.
@@ -539,6 +505,62 @@ base date, so they're reproducible and the file contents are stable.
 | 7 | Off-hours access | A finance user pulling payroll exports at 02:10 |
 
 `examples/zscaler-benign.log` — ~900 events, normal traffic only.
+
+---
+
+## Deploying
+
+The app runs on Vercel with any managed Postgres. Nothing about it is
+Vercel-specific — it's a standard Next.js app plus a `DATABASE_URL`.
+
+**1. Create a Postgres database.** On [Neon](https://neon.tech), create a
+project and copy the **pooled** connection string — the host contains `-pooler`.
+The pooler is what keeps serverless functions from exhausting the connection
+limit; the direct endpoint will work until it suddenly doesn't.
+
+**2. Apply the schema and seed the demo user**, from your machine:
+
+```bash
+DATABASE_URL='postgresql://…-pooler.…neon.tech/soc_logs?sslmode=require' \
+DEMO_USER_PASSWORD='<a password you choose>' \
+  npm run db:migrate:remote
+```
+
+(`db:migrate` reads `.env` for local work; `db:migrate:remote` takes the URL
+from the environment so it can point anywhere.)
+
+**3. Deploy.**
+
+```bash
+npx vercel link
+npx vercel env add DATABASE_URL production   # the pooled string from step 1
+npx vercel env add AUTH_SECRET production    # openssl rand -base64 32
+npx vercel deploy --prod
+```
+
+**Notes**
+
+- **End the connection string with `?sslmode=verify-full`,** not `?sslmode=require`.
+  The two behave identically today, but `pg` v9 redefines `require` as
+  encrypt-without-verifying — so `require` silently weakens the connection on a
+  future dependency bump, and logs a deprecation warning until then.
+- **TLS is otherwise automatic.** `src/lib/db.ts` enables verified TLS for any
+  non-local host. Note that when the URL carries an `sslmode`, `pg` builds its
+  own config from it and ignores the one in code — so `PGSSL_NO_VERIFY` only
+  applies to URLs with no `sslmode`, and the app warns if you set both.
+- **`ANTHROPIC_API_KEY` is set on the live demo,** so both AI surfaces are
+  active there — the model detection layer and the narrative. Leave it unset and
+  the deployment still works: uploads get the rule-generated brief, no model
+  layer, and the UI labels which one produced the text. Budget for roughly
+  **$0.20–0.35 per upload** (two model calls, ~28k input tokens) and set a spend
+  limit before sharing a public URL.
+- **The upload route sets `maxDuration = 60`.** Ingest is synchronous and a cold
+  start against a remote database plus two model calls takes ~28s, so the
+  default timeout isn't enough.
+- **The live demo's credentials differ from the local ones above.** The seeded
+  password is published in this README, which is fine for a local checkout and
+  not for a public URL — rotate it with `npm run db:set-password` after
+  deploying.
 
 ---
 
