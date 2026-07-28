@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { parseLogFile } from "@/lib/parser";
 import { detectAnomalies, dgaScore } from "@/lib/detectors";
-import type { Anomaly } from "@/lib/types";
+import type { Anomaly, LogEvent } from "@/lib/types";
 
 function analyse(file: string): Anomaly[] {
   const content = readFileSync(new URL(`../examples/${file}`, import.meta.url), "utf8");
@@ -85,8 +85,6 @@ test("rate spike catches the scanning host and reports its error rate", () => {
 
 test("brute force is flagged and the successful login is called out", () => {
   const auth = byDetector("auth_failure_burst");
-  // Exactly one: the scanning host also produces 401/403s, but spread across
-  // many paths, so endpoint concentration must exclude it.
   assert.equal(auth.length, 1, auth.map((a) => a.title).join("; "));
   assert.equal(auth[0].entity, "10.10.2.31");
   assert.equal(auth[0].evidence.failures, 69);
@@ -101,6 +99,69 @@ test("scanning is not misreported as credential stuffing", () => {
   assert.ok(
     !auth.some((a) => a.entity === "10.10.4.99"),
     "the scanning host was mislabelled as a brute-force source",
+  );
+});
+
+/**
+ * The test above only proves the scanner in *this file* isn't misreported, and
+ * it currently passes because its failure rate sits under the 50% gate — the
+ * endpoint-concentration rule never runs. Mutation testing caught that: deleting
+ * the concentration gate entirely left all tests green.
+ *
+ * So the rule gets its own test, on synthetic events built to isolate it. Both
+ * clients below clear the volume and failure-rate gates identically; the only
+ * difference is whether the failures land on one URL or many.
+ */
+function authEvents(clientIp: string, urls: string[], count: number): LogEvent[] {
+  const base = Date.parse("2024-05-14T10:00:00Z");
+  return Array.from({ length: count }, (_, i) => ({
+    lineNo: i + 1,
+    ts: new Date(base + i * 2000),
+    username: null,
+    department: null,
+    location: null,
+    clientIp,
+    serverIp: "10.20.1.5",
+    host: "vpn.example.local",
+    url: urls[i % urls.length],
+    method: "POST",
+    statusCode: 401,
+    action: "Allowed",
+    reason: null,
+    bytesSent: 400,
+    bytesReceived: 200,
+    category: null,
+    threatName: null,
+    riskScore: null,
+    userAgent: "curl/8.4.0",
+    referer: null,
+    appName: null,
+    raw: "",
+  }));
+}
+
+test("credential stuffing on one endpoint fires; the same volume sprayed across many does not", () => {
+  const oneUrl = authEvents("10.0.0.1", ["https://vpn.example.local/auth/login"], 40);
+  const manyUrls = authEvents(
+    "10.0.0.2",
+    Array.from({ length: 20 }, (_, i) => `https://vpn.example.local/path-${i}`),
+    40,
+  );
+
+  const stuffing = detectAnomalies(oneUrl).filter(
+    (a) => a.detector === "auth_failure_burst",
+  );
+  const scanning = detectAnomalies(manyUrls).filter(
+    (a) => a.detector === "auth_failure_burst",
+  );
+
+  assert.equal(stuffing.length, 1, "40 failures on one login URL should fire");
+  assert.equal(stuffing[0].evidence.endpointConcentration, 1);
+
+  assert.equal(
+    scanning.length,
+    0,
+    "the same 40 failures spread over 20 URLs is scanning, not credential guessing",
   );
 });
 
